@@ -133,7 +133,7 @@ const mintClick = async (
   let buyBeer = true;
   if (!process.env.NEXT_PUBLIC_BUYMARKBEER) {
     buyBeer = false;
-    console.log("The Creator does not want to pay for MarkSackerbergs beer 😒");
+    console.log("");
   }
 
   try {
