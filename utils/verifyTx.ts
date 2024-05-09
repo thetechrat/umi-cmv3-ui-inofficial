@@ -1,4 +1,4 @@
-import { PublicKey, Some, Umi } from "@metaplex-foundation/umi";
+import { BlockhashWithExpiryBlockHeight, PublicKey, Some, Umi } from "@metaplex-foundation/umi";
 import { createStandaloneToast } from "@chakra-ui/react";
 import { base58 } from "@metaplex-foundation/umi/serializers";
 
@@ -13,7 +13,7 @@ type VerifySignatureResult =
   | { success: true; mint: PublicKey; reason?: never }
   | { success: false; mint?: never; reason: string };
 
-export const verifyTx = async (umi: Umi, signatures: Uint8Array[]) => {
+export const verifyTx = async (umi: Umi, signatures: Uint8Array[], blockhash: BlockhashWithExpiryBlockHeight, commitment: "processed" | "confirmed" | "finalized") => {
   const verifySignature = async (
     signature: Uint8Array
   ): Promise<VerifySignatureResult> => {
@@ -38,6 +38,8 @@ export const verifyTx = async (umi: Umi, signatures: Uint8Array[]) => {
     return { success: true, mint: transaction.message.accounts[1] };
   };
 
+  await umi.rpc.confirmTransaction(signatures[0], { strategy: { type: "blockhash", ...blockhash}, commitment })
+
   const stati = await Promise.all(signatures.map(verifySignature));
   let successful: PublicKey[] = [];
   let failed: string[] = []
@@ -51,7 +53,7 @@ export const verifyTx = async (umi: Umi, signatures: Uint8Array[]) => {
 
   if (failed && failed.length > 0){
     createStandaloneToast().toast({
-      title: `${failed.length} Mints failed!`,
+      title: `${failed.length} transactions failed!`,
       status: "error",
       duration: 3000,
     });
@@ -62,7 +64,7 @@ export const verifyTx = async (umi: Umi, signatures: Uint8Array[]) => {
 
   if (successful.length > 0){
     createStandaloneToast().toast({
-      title: `${successful.length} Mints successful!`,
+      title: `${successful.length} transactions successful!`,
       status: "success",
       duration: 3000,
     });

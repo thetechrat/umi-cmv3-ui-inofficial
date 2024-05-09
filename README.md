@@ -22,6 +22,8 @@ You can use this repo to deploy your own candy machine UI.
 - The users see NFTs left, start and end countdowns, reasons for not being able to mint and more
 - Combining most of these guards is possible since we are lookup tables. For example using `allowlist`,`nftBurn`, `nftPayment`, `solPayment`, `startDate` and `endDate`
 - For larger allowlists this UI will automatically split the mint into two transactions to avoid hitting the transaction size limit
+- Dynamic Compute Unit calculation to have higher chances to get the mint included into a block
+- Priority fees are added. Those are hardcoded to a very small number. As of 15 March 24 all the dynamic solutions are only possibly with specific RPC providers. If you want to have it dynamic you need to implement it yourself.
 - It supports most of the existing guards:
   - `addressGate`
   - `allocation`
@@ -68,6 +70,7 @@ You can customize the UI by changing the code. If you just want to modify some v
   - `image` is the main image that is shown. You could change it to your project logo.
   - `headerText` is the website header. You could change it to your project name.
 - Decide if you want to allow multiple mints by a single user at the same time and in your `.env` file set `NEXT_PUBLIC_MULTIMINT` accordingly to `true` or `false`. By default a maximum of 15 NFTs can be minted at the same time this is because of wallet limitations. If you want to have less change `NEXT_PUBLIC_MAXMINTAMOUNT` in `.env`.
+- Change Priority fees if you want. By default it is set to the cheapest that is still considered to have priority fees. https://twitter.com/CloakdDev/status/1776661443330339285
 
 ### Fees
 This ui has a buy me a beer feature. Each mint will transfer a very small amount (0.005) of SOL to a tip wallet. If you do not want to support me feel free to change the NEXT_PUBLIC_BUYMARKBEER variable to false. I would appreachiate it though if you leave it on. 🍻

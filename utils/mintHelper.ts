@@ -9,6 +9,7 @@ import {
   route,
   getMerkleProof,
   safeFetchAllowListProofFromSeeds,
+  mintV2,
 } from "@metaplex-foundation/mpl-candy-machine";
 import {
   DigitalAssetWithToken,
@@ -22,8 +23,19 @@ import {
   TransactionBuilder,
   none,
   AddressLookupTableInput,
+  Transaction,
+  Signer,
+  sol,
+  BlockhashWithExpiryBlockHeight,
 } from "@metaplex-foundation/umi";
 import { GuardReturn } from "./checkerHelper";
+import { Connection } from "@solana/web3.js";
+import {
+  setComputeUnitPrice,
+  setComputeUnitLimit,
+  transferSol,
+} from "@metaplex-foundation/mpl-toolbox";
+import { toWeb3JsTransaction } from "@metaplex-foundation/umi-web3js-adapters";
 
 export interface GuardButtonList extends GuardReturn {
   header: string;
@@ -132,7 +144,7 @@ export const mintArgsBuilder = (
             nft.metadata.programmableConfig.__option === "Some" &&
             nft.metadata.programmableConfig.value.ruleSet.__option === "Some"
           ) {
-            ruleSet = nft.metadata.programmableConfig.value.ruleSet.value
+            ruleSet = nft.metadata.programmableConfig.value.ruleSet.value;
           }
         }
       }
@@ -140,7 +152,7 @@ export const mintArgsBuilder = (
         mint: nft.publicKey,
         requiredCollection,
         tokenStandard,
-        ruleSet
+        ruleSet,
       });
     }
   }
@@ -167,7 +179,7 @@ export const mintArgsBuilder = (
             nft.metadata.programmableConfig.__option === "Some" &&
             nft.metadata.programmableConfig.value.ruleSet.__option === "Some"
           ) {
-            ruleSet = nft.metadata.programmableConfig.value.ruleSet.value
+            ruleSet = nft.metadata.programmableConfig.value.ruleSet.value;
           }
         }
       }
@@ -175,7 +187,7 @@ export const mintArgsBuilder = (
         mint: nft.publicKey,
         requiredCollection,
         tokenStandard,
-        ruleSet
+        ruleSet,
       });
     }
   }
@@ -202,7 +214,7 @@ export const mintArgsBuilder = (
             nft.metadata.programmableConfig.__option === "Some" &&
             nft.metadata.programmableConfig.value.ruleSet.__option === "Some"
           ) {
-            ruleSet = nft.metadata.programmableConfig.value.ruleSet.value
+            ruleSet = nft.metadata.programmableConfig.value.ruleSet.value;
           }
         }
       }
@@ -211,7 +223,7 @@ export const mintArgsBuilder = (
         mint: nft.publicKey,
         requiredCollection,
         tokenStandard,
-        ruleSet
+        ruleSet,
       });
     }
   }
@@ -262,7 +274,7 @@ export const routeBuilder = async (
     const allowlist = allowLists.get(guardToUse.label);
     if (!allowlist) {
       console.error("allowlist not found!");
-      return transactionBuilder();
+      return tx2;
     }
     const allowListProof = await safeFetchAllowListProofFromSeeds(umi, {
       candyGuard: candyMachine.mintAuthority,
@@ -270,7 +282,9 @@ export const routeBuilder = async (
       merkleRoot: getMerkleRoot(allowlist),
       user: publicKey(umi.identity),
     });
+    console.log("allowListProof",allowListProof)
     if (allowListProof === null) {
+      console.log("null")
       tx2 = tx2.add(
         route(umi, {
           guard: "allowList",
@@ -317,3 +331,64 @@ export const combineTransactions = (
   }
   return returnArray;
 };
+
+export const buildTx = (
+  umi: Umi,
+  candyMachine: CandyMachine,
+  candyGuard: CandyGuard,
+  nftMint: Signer,
+  guardToUse:
+    | GuardGroup<DefaultGuardSet>
+    | {
+        label: string;
+        guards: undefined;
+      },
+  mintArgs: Partial<DefaultGuardSetMintArgs> | undefined,
+  luts: AddressLookupTableInput[],
+  latestBlockhash: BlockhashWithExpiryBlockHeight,
+  units: number,
+  buyBeer: boolean
+) => {
+  let tx = transactionBuilder().add(
+    mintV2(umi, {
+      candyMachine: candyMachine.publicKey,
+      collectionMint: candyMachine.collectionMint,
+      collectionUpdateAuthority: candyMachine.authority,
+      nftMint,
+      group: guardToUse.label === "default" ? none() : some(guardToUse.label),
+      candyGuard: candyGuard.publicKey,
+      mintArgs,
+      tokenStandard: candyMachine.tokenStandard,
+    })
+  );
+  if (buyBeer) {
+    tx = tx.prepend(
+      transferSol(umi, {
+        destination: publicKey(
+          "BeeryDvghgcKPTUw3N3bdFDFFWhTWdWHnsLuVebgsGSD"
+        ),
+        amount: sol(Number(0.005)),
+      })
+    );
+  }
+  tx = tx.prepend(setComputeUnitLimit(umi, { units }));
+  tx = tx.prepend(setComputeUnitPrice(umi, { microLamports: parseInt(process.env.NEXT_PUBLIC_MICROLAMPORTS ?? "1001") }));
+  tx = tx.setAddressLookupTables(luts);
+  tx = tx.setBlockhash(latestBlockhash);
+  return tx.build(umi);
+};
+
+// simulate CU based on Sammys gist https://gist.github.com/stegaBOB/7c0cdc916db4524dd9c285f9e4309475
+export const getRequiredCU = async (umi: Umi, transaction: Transaction) => {
+  const defaultCU = 800_000;
+  const web3tx = toWeb3JsTransaction(transaction);
+  let connection = new Connection(umi.rpc.getEndpoint(), "finalized");
+  const simulatedTx = await connection.simulateTransaction(web3tx, {
+    replaceRecentBlockhash: true,
+    sigVerify: false,
+  });
+  if (simulatedTx.value.err || !simulatedTx.value.unitsConsumed) {
+    return defaultCU;
+  }
+  return simulatedTx.value.unitsConsumed * 1.2 || defaultCU;
+}

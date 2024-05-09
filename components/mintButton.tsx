@@ -15,6 +15,7 @@ import {
   none,
   publicKey,
   signAllTransactions,
+  signTransaction,
   sol,
   some,
   transactionBuilder,
@@ -46,9 +47,7 @@ import {
   createStandaloneToast,
 } from "@chakra-ui/react";
 import {
-  fetchAddressLookupTable,
-  setComputeUnitLimit,
-  transferSol,
+  fetchAddressLookupTable, setComputeUnitPrice,
 } from "@metaplex-foundation/mpl-toolbox";
 import { Dispatch, SetStateAction, useEffect, useState } from "react";
 import {
@@ -56,6 +55,8 @@ import {
   routeBuilder,
   mintArgsBuilder,
   GuardButtonList,
+  buildTx,
+  getRequiredCU,
 } from "../utils/mintHelper";
 import { useSolanaTime } from "@/utils/SolanaTimeContext";
 import { verifyTx } from "@/utils/verifyTx";
@@ -131,7 +132,9 @@ const mintClick = async (
   }
 
   let buyBeer = true;
-  if (!process.env.NEXT_PUBLIC_BUYMARKBEER) {
+  console.log("buyBeer",process.env.NEXT_PUBLIC_BUYMARKBEER )
+
+  if (process.env.NEXT_PUBLIC_BUYMARKBEER  === "false") {
     buyBeer = false;
     console.log("");
   }
@@ -148,19 +151,35 @@ const mintClick = async (
     setGuardList(newGuardList);
 
     let routeBuild = await routeBuilder(umi, guardToUse, candyMachine);
-    if (routeBuild) {
+    if (routeBuild && routeBuild.items.length > 0) {
       createStandaloneToast().toast({
         title: "Allowlist detected. Please sign to be approved to mint.",
         status: "info",
         duration: 900,
         isClosable: true,
       });
-      await routeBuild.sendAndConfirm(umi, {
-        confirm: { commitment: "processed" },
-        send: {
-          skipPreflight: true,
-        },
-      });
+      routeBuild = routeBuild.prepend(setComputeUnitPrice(umi, { microLamports: parseInt(process.env.NEXT_PUBLIC_MICROLAMPORTS ?? "1001") }));
+      const latestBlockhash = await umi.rpc.getLatestBlockhash({commitment: "finalized"});
+      routeBuild = routeBuild.setBlockhash(latestBlockhash)
+      const builtTx = await routeBuild.buildAndSign(umi);
+      const sig = await umi.rpc
+        .sendTransaction(builtTx, { skipPreflight:true, maxRetries: 1, preflightCommitment: "finalized", commitment: "finalized" })
+        .then((signature) => {
+          return { status: "fulfilled", value: signature };
+        })
+        .catch((error) => {
+          createStandaloneToast().toast({
+            title: "Allow List TX failed!",
+            status: "error",
+            duration: 900,
+            isClosable: true,
+          });
+          return { status: "rejected", reason: error, value: new Uint8Array };
+
+        });
+        if (sig.status === "fulfilled")
+          await verifyTx(umi, [sig.value], latestBlockhash, "finalized");
+
     }
 
     // fetch LUT
@@ -182,41 +201,40 @@ const mintClick = async (
     const mintTxs: Transaction[] = [];
     let nftsigners = [] as KeypairSigner[];
 
-    const latestBlockhash = (await umi.rpc.getLatestBlockhash()).blockhash;
+    const latestBlockhash = (await umi.rpc.getLatestBlockhash({commitment: "finalized"}));
+    
+    const mintArgs = mintArgsBuilder(candyMachine, guardToUse, ownedTokens);
+    const nftMint = generateSigner(umi);
+    const txForSimulation = buildTx(
+      umi,
+      candyMachine,
+      candyGuard,
+      nftMint,
+      guardToUse,
+      mintArgs,
+      tables,
+      latestBlockhash,
+      1_400_000,
+      buyBeer
+    );
+    const requiredCu = await getRequiredCU(umi, txForSimulation);
 
     for (let i = 0; i < mintAmount; i++) {
       const nftMint = generateSigner(umi);
       nftsigners.push(nftMint);
-
-      const mintArgs = mintArgsBuilder(candyMachine, guardToUse, ownedTokens);
-      let tx = transactionBuilder().add(
-        mintV2(umi, {
-          candyMachine: candyMachine.publicKey,
-          collectionMint: candyMachine.collectionMint,
-          collectionUpdateAuthority: candyMachine.authority,
-          nftMint,
-          group:
-            guardToUse.label === "default" ? none() : some(guardToUse.label),
-          candyGuard: candyGuard.publicKey,
-          mintArgs,
-          tokenStandard: candyMachine.tokenStandard,
-        })
+      const transaction = buildTx(
+        umi,
+        candyMachine,
+        candyGuard,
+        nftMint,
+        guardToUse,
+        mintArgs,
+        tables,
+        latestBlockhash,
+        requiredCu,
+        buyBeer
       );
-
-      if (buyBeer) {
-        tx = tx.prepend(
-          transferSol(umi, {
-            destination: publicKey(
-              "BeeryDvghgcKPTUw3N3bdFDFFWhTWdWHnsLuVebgsGSD"
-            ),
-            amount: sol(Number(0.005)),
-          })
-        );
-      }
-      tx = tx.prepend(setComputeUnitLimit(umi, { units: 800_000 }));
-      tx = tx.setAddressLookupTables(tables);
-      tx = tx.setBlockhash(latestBlockhash);
-      const transaction = tx.build(umi);
+      console.log(transaction)
       mintTxs.push(transaction);
     }
     if (!mintTxs.length) {
@@ -234,9 +252,10 @@ const mintClick = async (
 
     let signatures: Uint8Array[] = [];
     let amountSent = 0;
+    
     const sendPromises = signedTransactions.map((tx, index) => {
       return umi.rpc
-        .sendTransaction(tx)
+        .sendTransaction(tx, { skipPreflight:true, maxRetries: 1, preflightCommitment: "finalized", commitment: "finalized" })
         .then((signature) => {
           console.log(
             `Transaction ${index + 1} resolved with signature: ${
@@ -272,7 +291,7 @@ const mintClick = async (
       duration: 3000,
     });
     
-    const successfulMints = await verifyTx(umi, signatures);
+    const successfulMints = await verifyTx(umi, signatures, latestBlockhash, "finalized");
 
     updateLoadingText(
       "Fetching your NFT",
